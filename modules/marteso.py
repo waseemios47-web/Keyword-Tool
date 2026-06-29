@@ -1,37 +1,44 @@
 """
 Marteso API Module
 
-Handles:
-- Loading Netscape cookies
-- Creating authenticated session
-- Searching keywords
-- Returning keyword metrics
+Features
+--------
+✓ Search keyword
+✓ Bulk keyword search
+✓ Get all tracked keywords
+✓ Get tracked keywords by country
+✓ Get tracked keyword count
+✓ Delete keyword
+✓ Delete all keywords in one country
 
 Author: Waseem
 """
 
-import json
 import requests
 from http.cookiejar import MozillaCookieJar
 
 
 class MartesoClient:
 
-    BASE_URL = "https://app.marteso.com/api/keywords"
+    BASE_URL = "https://app.marteso.com/api"
+    KEYWORDS_URL = f"{BASE_URL}/keywords"
 
-    def __init__(self, cookie_file="cookies/cookies.txt"):
+    def __init__(
+        self,
+        cookie_file="cookies/cookies.txt",
+        bundle_id="com.guess.the.puzzle.games"
+    ):
 
+        self.bundle_id = bundle_id
         self.cookie_file = cookie_file
+
         self.session = requests.Session()
 
         self._load_cookies()
 
-    ##########################################################
+    ######################################################################
 
     def _load_cookies(self):
-        """
-        Load Netscape cookies into the requests session.
-        """
 
         jar = MozillaCookieJar()
 
@@ -43,36 +50,36 @@ class MartesoClient:
 
         self.session.cookies.update(jar)
 
-    ##########################################################
+    ######################################################################
 
     def _headers(self):
 
         return {
+
             "Accept": "application/json",
+
             "Content-Type": "application/json",
+
             "Origin": "https://app.marteso.com",
+
             "Referer": "https://app.marteso.com/",
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/139.0 Safari/537.36"
-            )
+
+            "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/139.0 Safari/537.36"
+
         }
 
-    ##########################################################
+    ######################################################################
 
     def search_keyword(
         self,
         keyword,
         country="us",
-        language="en",
-        bundle_id="com.guess.the.puzzle.games"
+        language="en"
     ):
-        """
-        Search a single keyword.
-        """
 
         payload = {
 
@@ -82,13 +89,13 @@ class MartesoClient:
 
             "language": language,
 
-            "bundleId": bundle_id
+            "bundleId": self.bundle_id
 
         }
 
         response = self.session.post(
 
-            self.BASE_URL,
+            self.KEYWORDS_URL,
 
             json=payload,
 
@@ -98,21 +105,23 @@ class MartesoClient:
 
         )
 
-        if response.status_code != 200:
-
-            raise Exception(
-                f"Marteso Error {response.status_code}\n{response.text}"
-            )
+        response.raise_for_status()
 
         data = response.json()
 
         if not data.get("ok"):
 
-            raise Exception("Marteso returned unsuccessful response.")
+            raise Exception(data)
 
         keyword_data = data["keyword"]
 
+        if keyword_data is None:
+
+            raise Exception("Keyword not returned.")
+
         return {
+
+            "ID": keyword_data["id"],
 
             "Keyword": keyword_data["term"],
 
@@ -124,18 +133,19 @@ class MartesoClient:
 
             "Country": keyword_data["country"],
 
-            "Language": keyword_data["language"]
+            "Language": keyword_data["language"],
+
+            "Updated": keyword_data["updatedAt"]
 
         }
 
-    ##########################################################
+    ######################################################################
 
     def bulk_search(
         self,
         keywords,
         country,
-        language,
-        bundle_id="com.guess.the.puzzle.games"
+        language
     ):
 
         results = []
@@ -149,14 +159,15 @@ class MartesoClient:
 
             try:
 
-                result = self.search_keyword(
-                    kw,
-                    country,
-                    language,
-                    bundle_id
-                )
+                results.append(
 
-                results.append(result)
+                    self.search_keyword(
+                        kw,
+                        country,
+                        language
+                    )
+
+                )
 
             except Exception as e:
 
@@ -179,3 +190,143 @@ class MartesoClient:
                 })
 
         return results
+
+    ######################################################################
+
+    def get_all_keywords(self):
+
+        response = self.session.get(
+
+            self.KEYWORDS_URL,
+
+            params={
+
+                "bundleId": self.bundle_id
+
+            },
+
+            headers=self._headers(),
+
+            timeout=30
+
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        return data.get("items", [])
+
+    ######################################################################
+
+    def get_keywords_by_country(
+        self,
+        country
+    ):
+
+        items = self.get_all_keywords()
+
+        return [
+
+            x
+
+            for x in items
+
+            if x["country"] == country
+
+        ]
+
+    ######################################################################
+
+    def tracked_count(
+        self,
+        country=None
+    ):
+
+        if country is None:
+
+            return len(
+                self.get_all_keywords()
+            )
+
+        return len(
+
+            self.get_keywords_by_country(
+                country
+            )
+
+        )
+
+    ######################################################################
+
+    def remaining_slots(
+        self,
+        country,
+        limit=50
+    ):
+
+        return max(
+
+            0,
+
+            limit - self.tracked_count(country)
+
+        )
+
+    ######################################################################
+
+    def keyword_exists(
+        self,
+        keyword,
+        country
+    ):
+
+        keyword = keyword.lower()
+
+        for item in self.get_keywords_by_country(country):
+
+            if item["term"].lower() == keyword:
+
+                return True
+
+        return False
+
+    ######################################################################
+
+    def delete_keyword(
+        self,
+        keyword_id
+    ):
+
+        response = self.session.delete(
+
+            f"{self.KEYWORDS_URL}/{keyword_id}",
+
+            headers=self._headers(),
+
+            timeout=30
+
+        )
+
+        return response.status_code == 200
+
+    ######################################################################
+
+    def delete_country_keywords(
+        self,
+        country
+    ):
+
+        deleted = 0
+
+        keywords = self.get_keywords_by_country(
+            country
+        )
+
+        for item in keywords:
+
+            if self.delete_keyword(item["id"]):
+
+                deleted += 1
+
+        return deleted
