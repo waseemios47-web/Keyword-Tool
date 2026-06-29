@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time
 
 from modules.countries import (
     COUNTRY_NAMES,
@@ -48,17 +49,22 @@ with st.sidebar:
     st.subheader("Tracking Limits")
     
     try:
-        total_tracked = client.tracked_count(country)
-        remaining = client.remaining_slots(country)
+        # FIX: Fetch the GLOBAL count for the 50 limit, not just the country count
+        global_tracked = client.tracked_count(country=None) 
+        country_tracked = client.tracked_count(country=country)
+        
         MAX_SLOTS = 50
+        remaining = max(0, MAX_SLOTS - global_tracked)
         
         limit_color = "green" if remaining > 10 else ("orange" if remaining > 0 else "red")
         
-        st.markdown(f"**Tracked ({country.upper()}):** {total_tracked} / {MAX_SLOTS}")
-        st.markdown(f"**Remaining:** :{limit_color}[{remaining}]")
+        st.markdown(f"**Total Tracked (All Countries):** {global_tracked} / {MAX_SLOTS}")
+        st.markdown(f"**Tracked in {country.upper()}:** {country_tracked}")
+        st.markdown(f"**Remaining Slots:** :{limit_color}[{remaining}]")
     except Exception as e:
         st.error(f"Failed to load limits.")
         remaining = 0
+        global_tracked = 0
 
     if st.button("Refresh Data", use_container_width=True):
         st.rerun()
@@ -104,7 +110,7 @@ with tab1:
             
             # Feedback
             if duplicates_count > 0:
-                st.info(f"Skipped {duplicates_count} keywords already tracked in {country.upper()}.")
+                st.info(f"Skipped {duplicates_count} keyword(s) already tracked in {country.upper()}.")
             if skipped_count > 0:
                 st.warning(f"Analyzed {len(to_analyze)} keywords. {skipped_count} skipped (no slots left).")
                 
@@ -122,9 +128,24 @@ with tab1:
                     except Exception as e:
                         new_results.append({
                             "Keyword": kw, "Popularity": None, "Difficulty": None, 
-                            "Search Volume": None, "Country": country, "Language": language
+                            "Search Volume": None, "Error": str(e)
                         })
                     progress.progress((i + 1) / len(to_analyze))
+                
+                # FIX: Wait 3 seconds for Marteso to fetch Apple metrics, then grab the fresh data
+                status.write("Fetching final metrics from Apple...")
+                time.sleep(3) 
+                
+                fresh_tracked_items = client.get_keywords_by_country(country)
+                
+                # Update our session results with the real data
+                for res in new_results:
+                    if res.get("Popularity") is None:
+                        match = next((item for item in fresh_tracked_items if item["term"] == res["Keyword"]), None)
+                        if match:
+                            res["Popularity"] = match.get("popularity")
+                            res["Difficulty"] = match.get("difficulty")
+                            res["Search Volume"] = match.get("searchVolume")
                     
                 status.empty()
                 progress.empty()
@@ -137,13 +158,13 @@ with tab1:
         if st.session_state["results"]:
             df_results = pd.DataFrame(st.session_state["results"])
             
-            # Clean up the dataframe for display
-            if "ID" in df_results.columns:
-                df_results = df_results.drop(columns=["ID"])
-            if "Updated" in df_results.columns:
-                df_results = df_results.drop(columns=["Updated"])
+            # Clean up the dataframe: drop unneeded columns to keep it minimal
+            cols_to_drop = ["ID", "Updated", "Country", "Language", "Error"]
+            for col in cols_to_drop:
+                if col in df_results.columns:
+                    df_results = df_results.drop(columns=[col])
                 
-            # Replace 'None' metrics with "Pending..."
+            # Replace any lingering 'None' metrics with "Pending..." just in case Apple was extra slow
             df_results = df_results.fillna("Pending...")
             
             st.dataframe(df_results, use_container_width=True, hide_index=True)
@@ -186,7 +207,6 @@ with tab2:
         with del_col1:
             keyword_to_delete = st.selectbox("Select Keyword to Delete", df_tracked["Keyword"].tolist(), label_visibility="collapsed")
             if st.button("Delete Selected", type="primary"):
-                # Lookup the hidden ID for deletion
                 target_id = df_tracked[df_tracked["Keyword"] == keyword_to_delete].iloc[0]["ID"]
                 if client.delete_keyword(target_id):
                     st.toast(f"Deleted {keyword_to_delete}")
