@@ -131,7 +131,6 @@ with tab1:
                         })
                     progress.progress((i + 1) / len(to_analyze))
                 
-                # Wait 3 seconds for Marteso backend to fetch data from Apple
                 status.write("Fetching final metrics from Apple...")
                 time.sleep(3) 
                 
@@ -153,31 +152,52 @@ with tab1:
                 st.rerun()
 
     with col_results:
-        # FIXED: Removed the dynamic country code from this header so it doesn't cause confusion
         st.markdown("### Session Results") 
         if st.session_state["results"]:
-            df_results = pd.DataFrame(st.session_state["results"])
             
-            # Clean up metadata columns but KEEP Country and Language as requested in the spec
-            cols_to_drop = ["ID", "Updated", "Error"]
-            for col in cols_to_drop:
-                if col in df_results.columns:
-                    df_results = df_results.drop(columns=[col])
+            # --- Custom Grid Header ---
+            header = st.columns([2.5, 1, 1, 1, 1.5, 1])
+            header[0].markdown("**Keyword**")
+            header[1].markdown("**Pop**")
+            header[2].markdown("**Diff**")
+            header[3].markdown("**Vol**")
+            header[4].markdown("**Locale**")
+            header[5].markdown("**Action**")
             
-            # Ensure proper column order for readability
-            all_cols = df_results.columns.tolist()
-            preferred_order = ["Keyword", "Popularity", "Difficulty", "Search Volume", "Country", "Language"]
-            ordered_cols = [c for c in preferred_order if c in all_cols] + [c for c in all_cols if c not in preferred_order]
-            df_results = df_results[ordered_cols]
+            st.divider()
+            
+            # --- Custom Grid Rows ---
+            # We use enumerate so we know exactly which index to remove if the delete button is clicked
+            for idx, res in enumerate(st.session_state["results"]):
+                row = st.columns([2.5, 1, 1, 1, 1.5, 1])
                 
-            # Replace any lingering None values
-            df_results = df_results.fillna("Pending...")
-            
-            # Standard upper-case transform for country codes to keep it beautiful
-            if "Country" in df_results.columns:
-                df_results["Country"] = df_results["Country"].astype(str).str.upper()
-            
-            st.dataframe(df_results, use_container_width=True, hide_index=True)
+                row[0].write(res.get("Keyword", ""))
+                row[1].write(res.get("Popularity", "Pending..."))
+                row[2].write(res.get("Difficulty", "Pending..."))
+                row[3].write(res.get("Search Volume", "Pending..."))
+                
+                locale_str = f"{str(res.get('Country', '')).upper()} / {res.get('Language', '')}"
+                row[4].write(locale_str)
+                
+                # Dynamic Delete Button
+                kw_id = res.get("ID")
+                if kw_id:
+                    # Unique key is required for every button in Streamlit
+                    if row[5].button("🗑️", key=f"del_{kw_id}_{idx}", help="Stop tracking this keyword"):
+                        # 1. Delete from Marteso API
+                        if client.delete_keyword(kw_id):
+                            # 2. Remove from local session state
+                            st.session_state["results"].pop(idx)
+                            st.toast(f"Deleted {res.get('Keyword')}!")
+                            # 3. Refresh UI instantly
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete.")
+                else:
+                    # If an API error occurred during fetch and no ID exists
+                    row[5].write("⚠️ Error")
+                    
+            st.divider()
             
             if st.button("Clear Session Results"):
                 st.session_state["results"] = []
