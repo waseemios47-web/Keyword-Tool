@@ -49,7 +49,6 @@ with st.sidebar:
     st.subheader("Tracking Limits")
     
     try:
-        # FIX: Fetch the GLOBAL count for the 50 limit, not just the country count
         global_tracked = client.tracked_count(country=None) 
         country_tracked = client.tracked_count(country=country)
         
@@ -128,11 +127,11 @@ with tab1:
                     except Exception as e:
                         new_results.append({
                             "Keyword": kw, "Popularity": None, "Difficulty": None, 
-                            "Search Volume": None, "Error": str(e)
+                            "Search Volume": None, "Country": country, "Language": language, "Error": str(e)
                         })
                     progress.progress((i + 1) / len(to_analyze))
                 
-                # FIX: Wait 3 seconds for Marteso to fetch Apple metrics, then grab the fresh data
+                # Wait 3 seconds for Marteso backend to fetch data from Apple
                 status.write("Fetching final metrics from Apple...")
                 time.sleep(3) 
                 
@@ -140,7 +139,7 @@ with tab1:
                 
                 # Update our session results with the real data
                 for res in new_results:
-                    if res.get("Popularity") is None:
+                    if res.get("Popularity") is None or res.get("Popularity") == "Pending...":
                         match = next((item for item in fresh_tracked_items if item["term"] == res["Keyword"]), None)
                         if match:
                             res["Popularity"] = match.get("popularity")
@@ -154,18 +153,29 @@ with tab1:
                 st.rerun()
 
     with col_results:
-        st.markdown(f"### Session Results ({country.upper()})")
+        # FIXED: Removed the dynamic country code from this header so it doesn't cause confusion
+        st.markdown("### Session Results") 
         if st.session_state["results"]:
             df_results = pd.DataFrame(st.session_state["results"])
             
-            # Clean up the dataframe: drop unneeded columns to keep it minimal
-            cols_to_drop = ["ID", "Updated", "Country", "Language", "Error"]
+            # Clean up metadata columns but KEEP Country and Language as requested in the spec
+            cols_to_drop = ["ID", "Updated", "Error"]
             for col in cols_to_drop:
                 if col in df_results.columns:
                     df_results = df_results.drop(columns=[col])
+            
+            # Ensure proper column order for readability
+            all_cols = df_results.columns.tolist()
+            preferred_order = ["Keyword", "Popularity", "Difficulty", "Search Volume", "Country", "Language"]
+            ordered_cols = [c for c in preferred_order if c in all_cols] + [c for c in all_cols if c not in preferred_order]
+            df_results = df_results[ordered_cols]
                 
-            # Replace any lingering 'None' metrics with "Pending..." just in case Apple was extra slow
+            # Replace any lingering None values
             df_results = df_results.fillna("Pending...")
+            
+            # Standard upper-case transform for country codes to keep it beautiful
+            if "Country" in df_results.columns:
+                df_results["Country"] = df_results["Country"].astype(str).str.upper()
             
             st.dataframe(df_results, use_container_width=True, hide_index=True)
             
